@@ -1,71 +1,76 @@
 import pandas as pd
 from datasets import Dataset
 from ragas import evaluate
-from ragas.metrics import faithfulness, answer_relevancy, context_recall, context_precision
+# --- FIXED: Import uppercase class names ---
+from ragas.metrics import Faithfulness, AnswerRelevancy, ContextRelevance 
 from langchain_ollama import ChatOllama, OllamaEmbeddings
+import ast
 
-class RagasEvaluator:
-    """
-    Uses the Ragas framework with local Ollama models to evaluate the performance
-    of a RAG system based on a log file.
-    """
-    def __init__(self, llm_model="llama3", embedding_model="nomic-embed-text"):
-        """
-        Initializes the evaluator with the specified Ollama models.
-        """
-        print("Initializing Ollama models for evaluation...")
-        # The LLM used for judging the responses
-        self.llm = ChatOllama(model=llm_model)
-        # The embedding model used for semantic similarity checks
-        self.embeddings = OllamaEmbeddings(model=embedding_model)
-        print("Models initialized.")
+# --- Ollama Configuration ---
+print("Initializing Ollama models for evaluation...")
+try:
+    # We use a powerful model as the judge
+    judge_llm = ChatOllama(model="llama3")
+    # The embedding model must match the one used in the RAG system
+    embedding_model = OllamaEmbeddings(model="nomic-embed-text")
+    print("Models initialized.")
+except Exception as e:
+    print(f"Failed to connect to Ollama. Is the Ollama application running? Details: {e}")
+    exit()
 
-    def evaluate_from_log(self, log_file_path):
-        """
-        Reads a CSV log file, prepares the data, and runs the Ragas evaluation.
-        """
-        try:
-            print(f"Reading log file from: {log_file_path}")
-            df = pd.read_csv(log_file_path)
-            
-            # Convert the pandas DataFrame into a Hugging Face Dataset object
-            dataset = Dataset.from_pandas(df)
-            print("Log file loaded and converted to dataset format.")
+# --- Load and Prepare the Log Data ---
+log_file = 'evaluation_log.csv'
+print(f"Reading log file from: {log_file}")
 
-            print("Starting evaluation... This may take a few minutes.")
-            # Run the evaluation with the specified metrics
-            result = evaluate(
-                dataset=dataset,
-                metrics=[
-                    faithfulness,       # How factually consistent is the answer to the context?
-                    answer_relevancy,   # How relevant is the answer to the question?
-                    context_recall,     # Does the retrieved context contain all necessary info?
-                    context_precision,  # Is the retrieved context signal stronger than the noise?
-                ],
-                llm=self.llm,
-                embeddings=self.embeddings,
-            )
-            print("Evaluation complete.")
-            
-            return result
+try:
+    log_df = pd.read_csv(log_file)
+    
+    # Convert the 'contexts' column from a string representation of a list back into an actual list
+    log_df['contexts'] = log_df['contexts'].apply(ast.literal_eval)
+    
+    # Convert the pandas DataFrame to a Hugging Face Dataset, which Ragas expects
+    evaluation_dataset = Dataset.from_pandas(log_df)
+    print("Log file loaded and converted to dataset format.")
+    
+except FileNotFoundError:
+    print(f"Error: The log file '{log_file}' was not found. Please run the chatbot first to generate some data.")
+    exit()
+except Exception as e:
+    print(f"An error occurred while preparing the dataset: {e}")
+    exit()
 
-        except FileNotFoundError:
-            print(f"Error: The log file was not found at '{log_file_path}'")
-            return None
-        except Exception as e:
-            print(f"An error occurred during evaluation: {e}")
-            return None
+# --- Define Evaluation Metrics ---
+# --- FIXED: Instantiate the metric classes ---
+metrics = [
+    Faithfulness(),      # How factually consistent is the answer to the context?
+    AnswerRelevancy(),  # How relevant is the answer to the question?
+    ContextRelevance(), # How relevant are the retrieved contexts to the question?
+]
 
-if __name__ == "__main__":
-    evaluator = RagasEvaluator()
-    evaluation_result = evaluator.evaluate_from_log('evaluation_log.csv')
+# --- Run the Evaluation ---
+print("Starting evaluation... This may take a few minutes.")
 
-    if evaluation_result:
-        print("\n--- RAG System Evaluation Report ---")
-        df_results = evaluation_result.to_pandas()
-        print(df_results)
-        
-        # Save the detailed results to a new CSV file
-        results_filename = 'evaluation_results_ollama.csv'
-        df_results.to_csv(results_filename, index=False)
-        print(f"\nDetailed evaluation results saved to '{results_filename}'")
+try:
+    result = evaluate(
+        dataset=evaluation_dataset,
+        metrics=metrics,
+        llm=judge_llm,
+        embeddings=embedding_model,
+        raise_exceptions=True 
+    )
+    
+    print("Evaluation complete.")
+    
+    # --- Display and Save Results ---
+    result_df = result.to_pandas()
+    print("\n--- Evaluation Results ---")
+    print(result_df)
+    
+    # Save the detailed results to a new CSV file
+    results_csv_path = 'evaluation_results.csv'
+    result_df.to_csv(results_csv_path, index=False)
+    print(f"\nDetailed results saved to {results_csv_path}")
+
+except Exception as e:
+    print(f"An error occurred during evaluation: {e}")
+
